@@ -13,7 +13,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex="https://.*",
+    allow_origin_regex=r"https://.*",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -21,14 +21,9 @@ app.add_middleware(
 
 clients = {}
 
+
 @app.middleware("http")
-async def middleware(request: Request, call_next):
-
-    request_id = request.headers.get("X-Request-ID")
-    if request_id is None or request_id == "":
-        request_id = str(uuid.uuid4())
-
-    request.state.request_id = request_id
+async def rate_limit(request: Request, call_next):
 
     client = request.headers.get("X-Client-Id")
 
@@ -43,33 +38,32 @@ async def middleware(request: Request, call_next):
         ]
 
         if len(clients[client]) >= RATE_LIMIT:
-            response = JSONResponse(
+            return JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded"},
                 headers={"Retry-After": "10"},
             )
-            response.headers["X-Request-ID"] = request_id
-            return response
 
         clients[client].append(now)
 
-    response = await call_next(request)
-
-    response.headers["X-Request-ID"] = request_id
-
-    return response
+    return await call_next(request)
 
 
 @app.get("/ping")
 async def ping(request: Request):
 
+    request_id = request.headers.get("X-Request-ID")
+
+    if not request_id:
+        request_id = str(uuid.uuid4())
+
     response = JSONResponse(
         content={
             "email": EMAIL,
-            "request_id": request.state.request_id,
+            "request_id": request_id
         }
     )
 
-    response.headers["X-Request-ID"] = request.state.request_id
+    response.headers["X-Request-ID"] = request_id
 
     return response
