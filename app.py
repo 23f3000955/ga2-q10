@@ -21,12 +21,11 @@ app.add_middleware(
 
 clients = {}
 
-
 @app.middleware("http")
 async def middleware(request: Request, call_next):
 
     request_id = request.headers.get("X-Request-ID")
-    if not request_id:
+    if request_id is None or request_id == "":
         request_id = str(uuid.uuid4())
 
     request.state.request_id = request_id
@@ -36,8 +35,7 @@ async def middleware(request: Request, call_next):
     if client:
         now = time.time()
 
-        if client not in clients:
-            clients[client] = []
+        clients.setdefault(client, [])
 
         clients[client] = [
             t for t in clients[client]
@@ -45,15 +43,18 @@ async def middleware(request: Request, call_next):
         ]
 
         if len(clients[client]) >= RATE_LIMIT:
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded"},
                 headers={"Retry-After": "10"},
             )
+            response.headers["X-Request-ID"] = request_id
+            return response
 
         clients[client].append(now)
 
     response = await call_next(request)
+
     response.headers["X-Request-ID"] = request_id
 
     return response
@@ -61,7 +62,14 @@ async def middleware(request: Request, call_next):
 
 @app.get("/ping")
 async def ping(request: Request):
-    return {
-        "email": EMAIL,
-        "request_id": request.state.request_id
-    }
+
+    response = JSONResponse(
+        content={
+            "email": EMAIL,
+            "request_id": request.state.request_id,
+        }
+    )
+
+    response.headers["X-Request-ID"] = request.state.request_id
+
+    return response
