@@ -15,7 +15,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"https://.*",
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -23,10 +23,17 @@ clients = {}
 
 
 @app.middleware("http")
-async def rate_limit(request: Request, call_next):
+async def request_context(request: Request, call_next):
 
+    # Request ID
+    req_id = request.headers.get("X-Request-ID")
+    if not req_id:
+        req_id = str(uuid.uuid4())
+
+    request.state.req_id = req_id
+
+    # Rate limiting
     client = request.headers.get("X-Client-Id")
-
     if client:
         now = time.time()
 
@@ -38,32 +45,26 @@ async def rate_limit(request: Request, call_next):
         ]
 
         if len(clients[client]) >= RATE_LIMIT:
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded"},
                 headers={"Retry-After": "10"},
             )
+            response.headers["X-Request-ID"] = req_id
+            return response
 
         clients[client].append(now)
 
-    return await call_next(request)
+    response = await call_next(request)
+
+    response.headers["X-Request-ID"] = req_id
+
+    return response
 
 
 @app.get("/ping")
 async def ping(request: Request):
-
-    request_id = request.headers.get("X-Request-ID")
-
-    if not request_id:
-        request_id = str(uuid.uuid4())
-
-    response = JSONResponse(
-        content={
-            "email": EMAIL,
-            "request_id": request_id
-        }
-    )
-
-    response.headers["X-Request-ID"] = request_id
-
-    return response
+    return {
+        "email": EMAIL,
+        "request_id": request.state.req_id
+    }
